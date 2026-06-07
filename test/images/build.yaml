@@ -1,0 +1,8 @@
+imagesWithoutTag:
+  - internal:
+      - ghcr.io/nirantaraai/k8s/coredns
+    public:
+      - ghcr.io/nirantaraai/k8s/coredns
+      - ghcr.io/nirantaraai/k8s/coredns
+platform: linux/amd64,linux/aarch64
+vendorVersion: 1.14.2

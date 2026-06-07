@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="220" viewBox="0 0 820 220" role="img" aria-label="nava">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#111c30"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="0.5" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="820" height="220" rx="22" fill="url(#bg)"/>
+  <rect x="1.5" y="1.5" width="817" height="217" rx="20.5" fill="none" stroke="url(#accent)" stroke-opacity="0.35" stroke-width="2"/>
+
+  <!-- mark: a stylized build/container cube -->
+  <g transform="translate(70 60)" filter="url(#glow)">
+    <path d="M50 0 L100 28 L100 84 L50 112 L0 84 L0 28 Z" fill="none" stroke="url(#accent)" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M50 0 L50 56 L0 28 M50 56 L100 28 M50 56 L50 112" fill="none" stroke="url(#accent)" stroke-width="5" stroke-linejoin="round" stroke-opacity="0.9"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="215" y="118" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="92" font-weight="800" letter-spacing="2" fill="url(#accent)">nava</text>
+  <text x="218" y="158" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="22" font-weight="500" letter-spacing="4" fill="#94a3b8">MAGE-DRIVEN BUILD &amp; DEPLOY TOOLKIT</text>
+</svg>

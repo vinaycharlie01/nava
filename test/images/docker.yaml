@@ -1,0 +1,38 @@
+# Docker configuration for CoreDNS image build and push
+
+# Multi-platform build configuration (with auto-push)
+buildxBuild:
+  context: .
+  dockerfile: Dockerfile
+  tags:
+    - ghcr.io/nirantaraai/k8s/coredns:latest
+    - ghcr.io/nirantaraai/k8s/coredns:1.14.2
+  buildArgs:
+    vendor_version: "1.14.2"
+    commit_id: "${COMMIT_ID:-unknown}"
+    image_version: "${IMAGE_VERSION:-1.14.2}"
+  platforms:
+    - linux/amd64
+    - linux/arm64
+  push: true  # Pushes during build - no separate push needed!
+  noCache: false
+  pull: true
+
+# Push configuration (for single platform builds)
+push:
+  image: ghcr.io/nirantaraai/k8s/coredns:latest
+  allTags: false
+  quiet: false
+
+# Pull configuration
+pull:
+  image: ghcr.io/nirantaraai/k8s/coredns:latest
+  platform: linux/amd64
+
+# Login configuration for GHCR
+login:
+  registry: ghcr.io
+  username: nirantaraai
+  passwordStdin: true
+
+# Made with Bob

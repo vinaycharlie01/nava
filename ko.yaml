@@ -1,0 +1,32 @@
+# ko configuration consumed by the `ko:*` mage targets.
+# Each section maps to one target; only the section you invoke needs to be set.
+
+build:
+  importPath: ./cmd/app
+  tags:
+    - latest
+  platform:
+    - linux/amd64
+  local: true
+  # push: true
+  # baseImage: ""
+  # bare: false
+  # preserveImportPaths: false
+
+apply:
+  filenames:
+    - k8s/deployment.yaml
+  platform:
+    - linux/amd64
+  local: false
+
+delete:
+  filenames:
+    - k8s/deployment.yaml
+
+publish:
+  importPath: ./cmd/app
+
+# resolve:
+#   importPaths:
+#     - ./cmd/app
