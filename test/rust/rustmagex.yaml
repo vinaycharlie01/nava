@@ -1,0 +1,40 @@
+directory: .
+
+setup:
+  checkToolchain: true
+  fetch: true
+
+build:
+  args:
+    - --release
+
+run:
+  args: []
+
+test:
+  args: []
+
+lint:
+  tool: clippy
+  args:
+    - --
+    - -D
+    - warnings
+
+format:
+  args:
+    - --
+    - --check
+
+clean:
+  useCargoClean: true
+  paths:
+    - target
+
+genCommands:
+  - name: check
+    command: check
+  - name: doc
+    command: doc
+    args:
+      - --no-deps

@@ -1,0 +1,12 @@
+{
+  "gopls": {
+    "buildFlags": ["-tags=mage"],
+    "env": {
+      "GOFLAGS": "-tags=mage"
+    }
+  },
+  "go.buildTags": "mage",
+  "go.toolsEnvVars": {
+    "GOFLAGS": "-tags=mage"
+  }
+}

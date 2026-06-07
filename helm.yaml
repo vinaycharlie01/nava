@@ -1,0 +1,38 @@
+# Helm configuration consumed by the `helm:*` mage targets.
+# Each section maps to one target; only the section you invoke needs to be set.
+
+install:
+  releaseName: example
+  chart: ./charts/example
+  namespace: default
+  createNamespace: true
+  wait: true
+  # values:
+  #   - ./charts/example/values.yaml
+  # set:
+  #   - image.tag=latest
+  # timeout: 5m
+
+upgrade:
+  releaseName: example
+  chart: ./charts/example
+  namespace: default
+  install: true
+  wait: true
+
+uninstall:
+  releaseName: example
+  namespace: default
+
+list:
+  namespace: "" # empty -> --all-namespaces
+
+lint:
+  chart: ./charts/example
+
+# repoAdd:
+#   name: bitnami
+#   url: https://charts.bitnami.com/bitnami
+
+# repoUpdate:
+#   args: []
