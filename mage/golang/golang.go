@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
-	"github.com/nirantaraai/nava/pkg/exec"
+	execx "github.com/nirantaraai/nava/pkg/exec"
+	gitx "github.com/nirantaraai/nava/pkg/git"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,6 +71,7 @@ type GoConfig struct {
 	Format      *FormatConfig      `yaml:"format,omitempty"`
 	Install     *InstallConfig     `yaml:"install,omitempty"`
 	Govulncheck *GovulncheckConfig `yaml:"govulncheck,omitempty"`
+	CrossBuild  *CrossBuildConfig  `yaml:"crossBuild,omitempty"`
 }
 
 // SetupOptions contains options for setting up Go environment
@@ -139,6 +143,22 @@ type InstallConfig struct {
 // GovulncheckConfig contains options for running govulncheck
 type GovulncheckConfig struct {
 	Packages []string `yaml:"packages,omitempty"`
+}
+
+// CrossBuildConfig contains options for cross-compiling Go binaries
+type CrossBuildConfig struct {
+	Main       string           `yaml:"main"`
+	Binary     string           `yaml:"binary"`
+	OutputDir  string           `yaml:"outputDir,omitempty"`
+	VersionPkg string           `yaml:"versionPkg,omitempty"`
+	LDFlags    string           `yaml:"ldflags,omitempty"`
+	Platforms  []PlatformTarget `yaml:"platforms"`
+}
+
+// PlatformTarget specifies an OS/arch combination to cross-compile for
+type PlatformTarget struct {
+	OS   string `yaml:"os"`
+	Arch string `yaml:"arch"`
 }
 
 // LoadGoConfig loads Go configuration from a YAML file
@@ -543,6 +563,70 @@ func (g *GoRunner) GovulncheckFromConfig() error {
 	return nil
 }
 
+// CrossBuildFromConfig cross-compiles Go binaries for each configured platform.
+// When versionPkg is set, Version/Commit/BuildDate ldflags are auto-injected via git.
+func (g *GoRunner) CrossBuildFromConfig() error {
+	if g.config == nil {
+		return fmt.Errorf("no configuration loaded")
+	}
+	cfg := g.config.CrossBuild
+	if cfg == nil {
+		return fmt.Errorf("no crossBuild configuration found")
+	}
+	if len(cfg.Platforms) == 0 {
+		return fmt.Errorf("crossBuild.platforms must not be empty")
+	}
+
+	outputDir := cfg.OutputDir
+	if outputDir == "" {
+		outputDir = "dist"
+	}
+
+	// Resolve ldflags: explicit value takes precedence; versionPkg triggers git injection
+	ldflags := cfg.LDFlags
+	if ldflags == "" && cfg.VersionPkg != "" {
+		git := gitx.NewGitRunner()
+		version, _ := git.GetVersion()
+		commit, _ := git.GetShortCommitSHA()
+		date := time.Now().UTC().Format(time.RFC3339)
+		ldflags = fmt.Sprintf("-s -w -X %s.Version=%s -X %s.Commit=%s -X %s.BuildDate=%s",
+			cfg.VersionPkg, version,
+			cfg.VersionPkg, commit,
+			cfg.VersionPkg, date)
+	}
+
+	slog.Info("Cross-compiling...", "platforms", len(cfg.Platforms), "binary", cfg.Binary)
+	start := time.Now()
+
+	for _, p := range cfg.Platforms {
+		outDir := filepath.Join(outputDir, p.OS+"_"+p.Arch)
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			return err
+		}
+		out := filepath.Join(outDir, cfg.Binary)
+
+		slog.Info("Cross-compiling platform", "os", p.OS, "arch", p.Arch, "output", out)
+
+		buildArgs := []string{"build"}
+		if ldflags != "" {
+			buildArgs = append(buildArgs, "-ldflags", ldflags)
+		}
+		buildArgs = append(buildArgs, "-o", out, cfg.Main)
+
+		cmd := exec.Command("go", buildArgs...) //nolint:gosec
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS="+p.OS, "GOARCH="+p.Arch)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("cross-build %s/%s: %w", p.OS, p.Arch, err)
+		}
+	}
+
+	slog.Info("Cross-build complete", "duration", time.Since(start))
+	return nil
+}
+
 // Package-level convenience functions for mage targets
 var defaultRunner = NewGoRunner()
 
@@ -591,3 +675,6 @@ func Install() error { return defaultRunner.InstallFromConfig() }
 
 // Govulncheck runs govulncheck (requires loaded config)
 func Govulncheck() error { return defaultRunner.GovulncheckFromConfig() }
+
+// CrossBuild cross-compiles for all configured platforms (requires loaded config)
+func CrossBuild() error { return defaultRunner.CrossBuildFromConfig() }

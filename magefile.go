@@ -46,6 +46,9 @@ func (Go) Govulncheck() error { return gomagex.Govulncheck() }
 // Setup downloads Go module dependencies
 func (Go) Setup() error { return gomagex.Setup() }
 
+// CrossBuild cross-compiles for all configured platforms
+func (Go) CrossBuild() error { return gomagex.CrossBuild() }
+
 // Helm namespace for Helm-related targets
 type Helm mg.Namespace
 
