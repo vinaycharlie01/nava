@@ -55,15 +55,19 @@ func (g *GoRunner) LoadConfig(filepath string) error {
 
 // GoConfig contains all Go operation configurations
 type GoConfig struct {
-	Directory string         `yaml:"directory,omitempty"`
-	Setup     *SetupOptions  `yaml:"setup,omitempty"`
-	Build     *BuildConfig   `yaml:"build,omitempty"`
-	Run       *RunConfig     `yaml:"run,omitempty"`
-	Test      *TestConfig    `yaml:"test,omitempty"`
-	Lint      *LintConfig    `yaml:"lint,omitempty"`
-	Vet       *VetConfig     `yaml:"vet,omitempty"`
-	Format    *FormatConfig  `yaml:"format,omitempty"`
-	Install   *InstallConfig `yaml:"install,omitempty"`
+	Directory   string             `yaml:"directory,omitempty"`
+	Setup       *SetupOptions      `yaml:"setup,omitempty"`
+	Build       *BuildConfig       `yaml:"build,omitempty"`
+	Run         *RunConfig         `yaml:"run,omitempty"`
+	Test        *TestConfig        `yaml:"test,omitempty"`
+	Race        *RaceConfig        `yaml:"race,omitempty"`
+	Coverage    *CoverageConfig    `yaml:"coverage,omitempty"`
+	Bench       *BenchConfig       `yaml:"bench,omitempty"`
+	Lint        *LintConfig        `yaml:"lint,omitempty"`
+	Vet         *VetConfig         `yaml:"vet,omitempty"`
+	Format      *FormatConfig      `yaml:"format,omitempty"`
+	Install     *InstallConfig     `yaml:"install,omitempty"`
+	Govulncheck *GovulncheckConfig `yaml:"govulncheck,omitempty"`
 }
 
 // SetupOptions contains options for setting up Go environment
@@ -91,6 +95,25 @@ type TestConfig struct {
 	Args     []string `yaml:"args,omitempty"`
 }
 
+// RaceConfig contains options for running Go race tests
+type RaceConfig struct {
+	Packages []string `yaml:"packages,omitempty"`
+	Args     []string `yaml:"args,omitempty"`
+}
+
+// CoverageConfig contains options for running Go test coverage
+type CoverageConfig struct {
+	Packages []string `yaml:"packages,omitempty"`
+	Args     []string `yaml:"args,omitempty"`
+	Output   string   `yaml:"output,omitempty"`
+}
+
+// BenchConfig contains options for running Go benchmarks
+type BenchConfig struct {
+	Packages []string `yaml:"packages,omitempty"`
+	Args     []string `yaml:"args,omitempty"`
+}
+
 // LintConfig contains options for running golangci-lint
 type LintConfig struct {
 	Args []string `yaml:"args,omitempty"`
@@ -113,6 +136,11 @@ type InstallConfig struct {
 	Args     []string `yaml:"args,omitempty"`
 }
 
+// GovulncheckConfig contains options for running govulncheck
+type GovulncheckConfig struct {
+	Packages []string `yaml:"packages,omitempty"`
+}
+
 // LoadGoConfig loads Go configuration from a YAML file
 func LoadGoConfig(filepath string) (*GoConfig, error) {
 	var config GoConfig
@@ -131,7 +159,7 @@ func LoadGoConfig(filepath string) (*GoConfig, error) {
 
 // RunInDir runs a Go command in a specific directory
 func (g *GoRunner) RunInDir(dir, command string, args ...string) error {
-	slog.Info("🔧 Running Go command in directory...", "dir", dir, "command", command)
+	slog.Info("Running Go command...", "dir", dir, "command", command)
 	start := time.Now()
 
 	cmdArgs := append([]string{command}, args...)
@@ -139,7 +167,7 @@ func (g *GoRunner) RunInDir(dir, command string, args ...string) error {
 		return err
 	}
 
-	slog.Info("✅ Command completed", "duration", time.Since(start))
+	slog.Info("Command completed", "duration", time.Since(start))
 	return nil
 }
 
@@ -157,7 +185,7 @@ func (g *GoRunner) SetupFromConfig() error {
 		dir = "."
 	}
 
-	slog.Info("🎯 Setting up Go environment from config...", "directory", dir)
+	slog.Info("Setting up Go environment...", "directory", dir)
 
 	if g.config.Setup.ModDownload {
 		if err := g.RunInDir(dir, "mod", "download"); err != nil {
@@ -171,7 +199,7 @@ func (g *GoRunner) SetupFromConfig() error {
 		}
 	}
 
-	slog.Info("✅ Go environment setup complete")
+	slog.Info("Go environment setup complete")
 	return nil
 }
 
@@ -189,14 +217,14 @@ func (g *GoRunner) BuildFromConfig() error {
 		dir = "."
 	}
 
-	slog.Info("🔨 Building Go binary from config...", "directory", dir)
+	slog.Info("Building Go binary...", "directory", dir)
 
-	buildArgs := append([]string{"build", "-o", g.config.Build.Output, g.config.Build.Main}, g.config.Build.Args...)
-	if err := g.RunInDir(dir, "build", buildArgs[1:]...); err != nil {
+	buildArgs := append([]string{"-o", g.config.Build.Output, g.config.Build.Main}, g.config.Build.Args...)
+	if err := g.RunInDir(dir, "build", buildArgs...); err != nil {
 		return err
 	}
 
-	slog.Info("✅ Build complete")
+	slog.Info("Build complete")
 	return nil
 }
 
@@ -214,31 +242,24 @@ func (g *GoRunner) RunFromConfig() error {
 		dir = "."
 	}
 
-	// Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Create context that can be cancelled
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle signals in goroutine
 	go func() {
 		sig := <-sigChan
-		slog.Info("🛑 Received shutdown signal", "signal", sig)
-		slog.Info("⏳ Initiating graceful shutdown...")
+		slog.Info("Received shutdown signal", "signal", sig)
 		cancel()
 	}()
 
-	slog.Info("🚀 Running Go program from config...", "directory", dir)
+	slog.Info("Running Go program...", "directory", dir)
 
-	runArgs := append([]string{"run", g.config.Run.Main}, g.config.Run.Args...)
-	cmdArgs := append([]string{"run"}, runArgs[1:]...)
-
-	if err := g.executor.RunInDir(ctx, dir, "go", false, cmdArgs...); err != nil {
-		// Check if error is due to context cancellation (graceful shutdown)
+	runArgs := append([]string{g.config.Run.Main}, g.config.Run.Args...)
+	if err := g.executor.RunInDir(ctx, dir, "go", false, append([]string{"run"}, runArgs...)...); err != nil {
 		if errors.Is(err, context.Canceled) {
-			slog.Info("✅ Program stopped gracefully")
+			slog.Info("Program stopped gracefully")
 			return nil
 		}
 		return err
@@ -266,17 +287,116 @@ func (g *GoRunner) TestFromConfig() error {
 		packages = []string{"./..."}
 	}
 
-	slog.Info("🧪 Running Go tests from config...", "directory", dir)
+	slog.Info("Running Go tests...", "directory", dir)
 	start := time.Now()
 
-	testArgs := append([]string{"test"}, packages...)
-	testArgs = append(testArgs, g.config.Test.Args...)
-
-	if err := g.RunInDir(dir, "test", testArgs[1:]...); err != nil {
+	testArgs := append(packages, g.config.Test.Args...)
+	if err := g.RunInDir(dir, "test", testArgs...); err != nil {
 		return err
 	}
 
-	slog.Info("✅ Tests passed", "duration", time.Since(start))
+	slog.Info("Tests passed", "duration", time.Since(start))
+	return nil
+}
+
+// RaceFromConfig runs Go tests with race detection using loaded config
+func (g *GoRunner) RaceFromConfig() error {
+	if g.config == nil {
+		return fmt.Errorf("no configuration loaded")
+	}
+	if g.config.Race == nil {
+		return fmt.Errorf("no race configuration found")
+	}
+
+	dir := g.config.Directory
+	if dir == "" {
+		dir = "."
+	}
+
+	packages := g.config.Race.Packages
+	if len(packages) == 0 {
+		packages = []string{"./..."}
+	}
+
+	slog.Info("Running race tests...", "directory", dir)
+	start := time.Now()
+
+	raceArgs := append([]string{"-race"}, packages...)
+	raceArgs = append(raceArgs, g.config.Race.Args...)
+	if err := g.RunInDir(dir, "test", raceArgs...); err != nil {
+		return err
+	}
+
+	slog.Info("Race tests passed", "duration", time.Since(start))
+	return nil
+}
+
+// CoverageFromConfig runs Go tests with coverage profiling using loaded config
+func (g *GoRunner) CoverageFromConfig() error {
+	if g.config == nil {
+		return fmt.Errorf("no configuration loaded")
+	}
+	if g.config.Coverage == nil {
+		return fmt.Errorf("no coverage configuration found")
+	}
+
+	dir := g.config.Directory
+	if dir == "" {
+		dir = "."
+	}
+
+	packages := g.config.Coverage.Packages
+	if len(packages) == 0 {
+		packages = []string{"./..."}
+	}
+
+	output := g.config.Coverage.Output
+	if output == "" {
+		output = "coverage.out"
+	}
+
+	slog.Info("Running coverage...", "directory", dir)
+	start := time.Now()
+
+	coverArgs := append([]string{"-coverprofile=" + output, "-covermode=atomic"}, packages...)
+	coverArgs = append(coverArgs, g.config.Coverage.Args...)
+	if err := g.RunInDir(dir, "test", coverArgs...); err != nil {
+		return err
+	}
+
+	slog.Info("Coverage complete", "duration", time.Since(start), "output", output)
+	return nil
+}
+
+// BenchFromConfig runs Go benchmarks using loaded config
+func (g *GoRunner) BenchFromConfig() error {
+	if g.config == nil {
+		return fmt.Errorf("no configuration loaded")
+	}
+	if g.config.Bench == nil {
+		return fmt.Errorf("no bench configuration found")
+	}
+
+	dir := g.config.Directory
+	if dir == "" {
+		dir = "."
+	}
+
+	packages := g.config.Bench.Packages
+	if len(packages) == 0 {
+		packages = []string{"./..."}
+	}
+
+	slog.Info("Running benchmarks...", "directory", dir)
+	start := time.Now()
+
+	benchArgs := append([]string{"-bench=.", "-benchmem", "-run=^$"}, packages...)
+	benchArgs = append(benchArgs, g.config.Bench.Args...)
+	if err := g.RunInDir(dir, "test", benchArgs...); err != nil {
+		return err
+	}
+
+	slog.Info("Benchmarks complete", "duration", time.Since(start))
 	return nil
 }
 
@@ -294,17 +414,15 @@ func (g *GoRunner) LintFromConfig() error {
 		dir = "."
 	}
 
-	slog.Info("🔍 Running golangci-lint from config...", "directory", dir)
+	slog.Info("Running golangci-lint...", "directory", dir)
 	start := time.Now()
 
-	defaultArgs := []string{"run", "--timeout=5m"}
-	lintArgs := append(defaultArgs, g.config.Lint.Args...)
-
+	lintArgs := append([]string{"run", "--timeout=5m"}, g.config.Lint.Args...)
 	if err := g.executor.RunInDir(context.Background(), dir, "golangci-lint", false, lintArgs...); err != nil {
 		return err
 	}
 
-	slog.Info("✅ Linting passed", "duration", time.Since(start))
+	slog.Info("Linting passed", "duration", time.Since(start))
 	return nil
 }
 
@@ -327,17 +445,15 @@ func (g *GoRunner) VetFromConfig() error {
 		packages = []string{"./..."}
 	}
 
-	slog.Info("🔍 Running go vet from config...", "directory", dir)
+	slog.Info("Running go vet...", "directory", dir)
 	start := time.Now()
 
-	vetArgs := append([]string{"vet"}, packages...)
-	vetArgs = append(vetArgs, g.config.Vet.Args...)
-
-	if err := g.RunInDir(dir, "vet", vetArgs[1:]...); err != nil {
+	vetArgs := append(packages, g.config.Vet.Args...)
+	if err := g.RunInDir(dir, "vet", vetArgs...); err != nil {
 		return err
 	}
 
-	slog.Info("✅ Go vet passed", "duration", time.Since(start))
+	slog.Info("Go vet passed", "duration", time.Since(start))
 	return nil
 }
 
@@ -355,17 +471,15 @@ func (g *GoRunner) FormatFromConfig() error {
 		dir = "."
 	}
 
-	slog.Info("✨ Formatting Go code from config...", "directory", dir)
+	slog.Info("Formatting Go code...", "directory", dir)
 	start := time.Now()
 
-	defaultArgs := []string{"-w", "."}
-	formatArgs := append(defaultArgs, g.config.Format.Args...)
-
+	formatArgs := append([]string{"-w", "."}, g.config.Format.Args...)
 	if err := g.executor.RunInDir(context.Background(), dir, "gofmt", false, formatArgs...); err != nil {
 		return err
 	}
 
-	slog.Info("✅ Formatting complete", "duration", time.Since(start))
+	slog.Info("Formatting complete", "duration", time.Since(start))
 	return nil
 }
 
@@ -379,7 +493,7 @@ func (g *GoRunner) InstallFromConfig() error {
 	}
 
 	if len(g.config.Install.Packages) == 0 {
-		slog.Info("ℹ️  No packages to install")
+		slog.Info("No packages to install")
 		return nil
 	}
 
@@ -388,17 +502,44 @@ func (g *GoRunner) InstallFromConfig() error {
 		dir = "."
 	}
 
-	slog.Info("📦 Installing Go packages from config...", "directory", dir, "packages", g.config.Install.Packages)
+	slog.Info("Installing Go packages...", "directory", dir, "packages", g.config.Install.Packages)
 	start := time.Now()
 
 	for _, pkg := range g.config.Install.Packages {
-		installArgs := append([]string{"install", pkg}, g.config.Install.Args...)
-		if err := g.RunInDir(dir, "install", installArgs[1:]...); err != nil {
+		installArgs := append([]string{pkg}, g.config.Install.Args...)
+		if err := g.RunInDir(dir, "install", installArgs...); err != nil {
 			return fmt.Errorf("failed to install %s: %w", pkg, err)
 		}
 	}
 
-	slog.Info("✅ Installation complete", "duration", time.Since(start))
+	slog.Info("Installation complete", "duration", time.Since(start))
+	return nil
+}
+
+// GovulncheckFromConfig runs govulncheck using loaded config
+func (g *GoRunner) GovulncheckFromConfig() error {
+	if g.config == nil {
+		return fmt.Errorf("no configuration loaded")
+	}
+
+	dir := g.config.Directory
+	if dir == "" {
+		dir = "."
+	}
+
+	packages := []string{"./..."}
+	if g.config.Govulncheck != nil && len(g.config.Govulncheck.Packages) > 0 {
+		packages = g.config.Govulncheck.Packages
+	}
+
+	slog.Info("Running govulncheck...", "directory", dir)
+	start := time.Now()
+
+	if err := g.executor.RunInDir(context.Background(), dir, "govulncheck", false, packages...); err != nil {
+		return err
+	}
+
+	slog.Info("Govulncheck passed", "duration", time.Since(start))
 	return nil
 }
 
@@ -416,41 +557,37 @@ func NewRunnerFromYAML(filepath string) (*GoRunner, error) {
 }
 
 // Setup sets up Go environment (requires loaded config)
-func Setup() error {
-	return defaultRunner.SetupFromConfig()
-}
+func Setup() error { return defaultRunner.SetupFromConfig() }
 
 // Build builds Go binary (requires loaded config)
-func Build() error {
-	return defaultRunner.BuildFromConfig()
-}
+func Build() error { return defaultRunner.BuildFromConfig() }
 
 // Run runs Go program (requires loaded config)
-func Run() error {
-	return defaultRunner.RunFromConfig()
-}
+func Run() error { return defaultRunner.RunFromConfig() }
 
 // Test runs Go tests (requires loaded config)
-func Test() error {
-	return defaultRunner.TestFromConfig()
-}
+func Test() error { return defaultRunner.TestFromConfig() }
+
+// Race runs tests with race detection (requires loaded config)
+func Race() error { return defaultRunner.RaceFromConfig() }
+
+// Coverage runs tests with coverage profiling (requires loaded config)
+func Coverage() error { return defaultRunner.CoverageFromConfig() }
+
+// Bench runs benchmarks (requires loaded config)
+func Bench() error { return defaultRunner.BenchFromConfig() }
 
 // Lint runs golangci-lint (requires loaded config)
-func Lint() error {
-	return defaultRunner.LintFromConfig()
-}
+func Lint() error { return defaultRunner.LintFromConfig() }
 
 // Vet runs go vet (requires loaded config)
-func Vet() error {
-	return defaultRunner.VetFromConfig()
-}
+func Vet() error { return defaultRunner.VetFromConfig() }
 
 // Format formats Go code (requires loaded config)
-func Format() error {
-	return defaultRunner.FormatFromConfig()
-}
+func Format() error { return defaultRunner.FormatFromConfig() }
 
 // Install installs Go packages (requires loaded config)
-func Install() error {
-	return defaultRunner.InstallFromConfig()
-}
+func Install() error { return defaultRunner.InstallFromConfig() }
+
+// Govulncheck runs govulncheck (requires loaded config)
+func Govulncheck() error { return defaultRunner.GovulncheckFromConfig() }

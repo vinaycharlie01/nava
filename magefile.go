@@ -4,17 +4,47 @@ package main
 
 import (
 	"github.com/magefile/mage/mg"
+	gomagex "github.com/nirantaraai/nava/mage/golang"
 	helmmagex "github.com/nirantaraai/nava/mage/helm"
 	komagex "github.com/nirantaraai/nava/mage/ko"
 )
 
-// init loads the YAML configs once before any target runs. Errors (e.g. a
-// missing file) are deferred to the target, which reports "configuration not
-// loaded" only for the section it actually needs.
+// init loads the YAML configs once before any target runs.
 func init() {
+	_ = gomagex.LoadConfig("go.yaml")
 	_ = helmmagex.LoadConfig("helm.yaml")
 	_ = komagex.LoadConfig("ko.yaml")
 }
+
+// Go namespace for Go development targets
+type Go mg.Namespace
+
+// Build compiles the Go packages
+func (Go) Build() error { return gomagex.Build() }
+
+// Test runs the test suite
+func (Go) Test() error { return gomagex.Test() }
+
+// Race runs tests with race detection
+func (Go) Race() error { return gomagex.Race() }
+
+// Coverage runs tests with coverage profiling
+func (Go) Coverage() error { return gomagex.Coverage() }
+
+// Bench runs benchmarks
+func (Go) Bench() error { return gomagex.Bench() }
+
+// Lint runs golangci-lint
+func (Go) Lint() error { return gomagex.Lint() }
+
+// Vet runs go vet
+func (Go) Vet() error { return gomagex.Vet() }
+
+// Govulncheck runs govulncheck
+func (Go) Govulncheck() error { return gomagex.Govulncheck() }
+
+// Setup downloads Go module dependencies
+func (Go) Setup() error { return gomagex.Setup() }
 
 // Helm namespace for Helm-related targets
 type Helm mg.Namespace
