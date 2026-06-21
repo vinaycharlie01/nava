@@ -82,9 +82,12 @@ type SetupOptions struct {
 
 // BuildConfig contains options for building Go binaries
 type BuildConfig struct {
-	Output string   `yaml:"output"`
-	Main   string   `yaml:"main"`
-	Args   []string `yaml:"args,omitempty"`
+	Output     string   `yaml:"output"`
+	Main       string   `yaml:"main"`
+	Args       []string `yaml:"args,omitempty"`
+	VersionPkg string   `yaml:"versionPkg,omitempty"` // auto-inject Version/Commit/BuildDate ldflags via git
+	LDFlags    string   `yaml:"ldflags,omitempty"`    // raw ldflags string (overrides versionPkg)
+	NoCGO      bool     `yaml:"noCGO,omitempty"`      // set CGO_ENABLED=0 for a static binary
 }
 
 // RunConfig contains options for running Go programs
@@ -223,7 +226,9 @@ func (g *GoRunner) SetupFromConfig() error {
 	return nil
 }
 
-// BuildFromConfig builds Go binary using loaded config
+// BuildFromConfig builds Go binary using loaded config.
+// When versionPkg is set, Version/Commit/BuildDate ldflags are auto-injected via git.
+// When noCGO is true, CGO_ENABLED=0 is set for a static binary.
 func (g *GoRunner) BuildFromConfig() error {
 	if g.config == nil {
 		return fmt.Errorf("no configuration loaded")
@@ -232,19 +237,63 @@ func (g *GoRunner) BuildFromConfig() error {
 		return fmt.Errorf("no build configuration found")
 	}
 
+	cfg := g.config.Build
 	dir := g.config.Directory
 	if dir == "" {
 		dir = "."
 	}
 
-	slog.Info("Building Go binary...", "directory", dir)
+	slog.Info("Building Go binary...", "directory", dir, "output", cfg.Output)
+	start := time.Now()
 
-	buildArgs := append([]string{"-o", g.config.Build.Output, g.config.Build.Main}, g.config.Build.Args...)
-	if err := g.RunInDir(dir, "build", buildArgs...); err != nil {
-		return err
+	// Resolve ldflags: explicit value wins; versionPkg triggers git injection
+	ldflags := cfg.LDFlags
+	if ldflags == "" && cfg.VersionPkg != "" {
+		git := gitx.NewGitRunner()
+		version, _ := git.GetVersion()
+		commit, _ := git.GetShortCommitSHA()
+		date := time.Now().UTC().Format(time.RFC3339)
+		ldflags = fmt.Sprintf("-s -w -X %s.Version=%s -X %s.Commit=%s -X %s.BuildDate=%s",
+			cfg.VersionPkg, version,
+			cfg.VersionPkg, commit,
+			cfg.VersionPkg, date)
 	}
 
-	slog.Info("Build complete")
+	if ldflags != "" || cfg.NoCGO {
+		// Need env control: use exec.Command directly
+		buildArgs := []string{"build"}
+		if ldflags != "" {
+			buildArgs = append(buildArgs, "-ldflags", ldflags)
+		}
+		buildArgs = append(buildArgs, cfg.Args...)
+		buildArgs = append(buildArgs, "-o", cfg.Output, cfg.Main)
+
+		if outDir := filepath.Dir(cfg.Output); outDir != "." {
+			if err := os.MkdirAll(outDir, 0o755); err != nil {
+				return err
+			}
+		}
+
+		cmd := exec.Command("go", buildArgs...) //nolint:gosec
+		if cfg.NoCGO {
+			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		}
+		if dir != "." {
+			cmd.Dir = dir
+		}
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("build: %w", err)
+		}
+	} else {
+		buildArgs := append([]string{"-o", cfg.Output, cfg.Main}, cfg.Args...)
+		if err := g.RunInDir(dir, "build", buildArgs...); err != nil {
+			return err
+		}
+	}
+
+	slog.Info("Build complete", "duration", time.Since(start))
 	return nil
 }
 
