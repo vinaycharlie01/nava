@@ -63,6 +63,7 @@ type GoConfig struct {
 	Build       *BuildConfig       `yaml:"build,omitempty"`
 	Run         *RunConfig         `yaml:"run,omitempty"`
 	Test        *TestConfig        `yaml:"test,omitempty"`
+	Integration *IntegrationConfig `yaml:"integration,omitempty"`
 	Race        *RaceConfig        `yaml:"race,omitempty"`
 	Coverage    *CoverageConfig    `yaml:"coverage,omitempty"`
 	Bench       *BenchConfig       `yaml:"bench,omitempty"`
@@ -100,6 +101,13 @@ type RunConfig struct {
 type TestConfig struct {
 	Packages []string `yaml:"packages,omitempty"`
 	Args     []string `yaml:"args,omitempty"`
+}
+
+// IntegrationConfig contains options for running Go integration tests
+type IntegrationConfig struct {
+	Packages []string `yaml:"packages,omitempty"`
+	Args     []string `yaml:"args,omitempty"`
+	Env      []string `yaml:"env,omitempty"`
 }
 
 // RaceConfig contains options for running Go race tests
@@ -365,6 +373,54 @@ func (g *GoRunner) TestFromConfig() error {
 	}
 
 	slog.Info("Tests passed", "duration", time.Since(start))
+	return nil
+}
+
+// IntegrationFromConfig runs Go integration tests using loaded config
+func (g *GoRunner) IntegrationFromConfig() error {
+	if g.config == nil {
+		return fmt.Errorf("no configuration loaded")
+	}
+	if g.config.Integration == nil {
+		return fmt.Errorf("no integration configuration found")
+	}
+
+	dir := g.config.Directory
+	if dir == "" {
+		dir = "."
+	}
+
+	packages := g.config.Integration.Packages
+	if len(packages) == 0 {
+		packages = []string{"./test/integration/..."}
+	}
+
+	slog.Info("Running integration tests...", "directory", dir)
+	start := time.Now()
+
+	// Build test command with environment variables
+	testArgs := append(packages, g.config.Integration.Args...)
+
+	// Use exec.Command to set environment variables
+	cmdArgs := append([]string{"test"}, testArgs...)
+	cmd := exec.Command("go", cmdArgs...) //nolint:gosec
+
+	// Set environment variables if provided
+	if len(g.config.Integration.Env) > 0 {
+		cmd.Env = append(os.Environ(), g.config.Integration.Env...)
+	}
+
+	if dir != "." {
+		cmd.Dir = dir
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("integration tests failed: %w", err)
+	}
+
+	slog.Info("Integration tests passed", "duration", time.Since(start))
 	return nil
 }
 
@@ -700,6 +756,9 @@ func Run() error { return defaultRunner.RunFromConfig() }
 
 // Test runs Go tests (requires loaded config)
 func Test() error { return defaultRunner.TestFromConfig() }
+
+// Integration runs integration tests (requires loaded config)
+func Integration() error { return defaultRunner.IntegrationFromConfig() }
 
 // Race runs tests with race detection (requires loaded config)
 func Race() error { return defaultRunner.RaceFromConfig() }
