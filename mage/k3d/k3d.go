@@ -3,7 +3,7 @@ package k3dmagex
 import (
 	"fmt"
 
-	"github.com/nirantaraai/nava/pkg/k3d"
+	k3dx "github.com/nirantaraai/nava/pkg/k3d"
 )
 
 const defaultConfigPath = "k3d.yaml"

@@ -1,3 +1,4 @@
+
 package k8sx
 
 import (
@@ -31,9 +32,9 @@ func NewK8sRunnerWithExecutor(executor execx.Executor) *K8sRunner {
 
 // ApplyOptions contains options for kubectl apply
 type ApplyOptions struct {
-	Filenames  []string
-	Namespace  string
-	Kustomize  string
+	Filenames []string
+	Namespace string
+	Kustomize string
 	ServerSide bool
 	Force      bool
 	Stdin      string // If provided, used as -f -
@@ -164,7 +165,7 @@ func (k *K8sRunner) CreateNamespace(name string) error {
 	start := time.Now()
 
 	args := []string{"create", "namespace", name}
-
+	
 	err := k.executor.Run(context.Background(), "kubectl", false, args...)
 	if err != nil {
 		// If it already exists, we don't want to return an error
@@ -294,11 +295,11 @@ func (k *K8sRunner) RolloutStatus(resource, namespace string, timeout string) er
 
 // CreateSecretOptions contains options for kubectl create secret
 type CreateSecretOptions struct {
-	Name        string
-	Namespace   string
-	Type        string // generic, docker-registry, tls
-	FromLiteral []string
-	FromFile    []string
+	Name         string
+	Namespace    string
+	Type         string // generic, docker-registry, tls
+	FromLiteral  []string
+	FromFile     []string
 }
 
 // CreateSecret creates a secret

@@ -8,8 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/nirantaraai/nava/pkg/exec"
-
+	execx "github.com/nirantaraai/nava/pkg/exec"
 	"gopkg.in/yaml.v3"
 )
 

@@ -3,7 +3,7 @@ package sopsmagex
 import (
 	"fmt"
 
-	"github.com/nirantaraai/nava/pkg/sops"
+	sopsx "github.com/nirantaraai/nava/pkg/sops"
 )
 
 const defaultConfigPath = "k3d.yaml"

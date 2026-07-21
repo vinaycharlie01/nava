@@ -8,10 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nirantaraai/nava/pkg/exec"
-	"github.com/nirantaraai/nava/pkg/helm"
-	"github.com/nirantaraai/nava/pkg/k8s"
-
+	execx "github.com/nirantaraai/nava/pkg/exec"
+	helmx "github.com/nirantaraai/nava/pkg/helm"
+	k8sx "github.com/nirantaraai/nava/pkg/k8s"
 	"gopkg.in/yaml.v3"
 )
 
@@ -80,11 +79,12 @@ type K3dConfig struct {
 
 // ClusterConfig holds k3d cluster creation settings.
 type ClusterConfig struct {
-	Name    string   `yaml:"name"`
-	Servers int      `yaml:"servers"`
-	Agents  int      `yaml:"agents"`
-	Ports   []string `yaml:"ports,omitempty"`
-	K3sArgs []string `yaml:"k3sArgs,omitempty"`
+	Name           string   `yaml:"name"`
+	Servers        int      `yaml:"servers"`
+	Agents         int      `yaml:"agents"`
+	Ports          []string `yaml:"ports,omitempty"`
+	K3sArgs        []string `yaml:"k3sArgs,omitempty"`
+	RegistryConfig string   `yaml:"registryConfig,omitempty"`
 }
 
 // StorageClassConfig defines an optional StorageClass to create after cluster bootstrap.
@@ -115,17 +115,26 @@ type ReleaseConfig struct {
 
 // ArgoCDConfig describes ArgoCD-specific settings.
 type ArgoCDConfig struct {
-	Release             ReleaseConfig     `yaml:"release"`
-	AppOfApps           string            `yaml:"appOfApps"`
-	RepoSecret          *RepoSecretConfig `yaml:"repoSecret,omitempty"`
-	ApplicationsToPrune []string          `yaml:"applicationsToPrune,omitempty"`
+	Release             ReleaseConfig              `yaml:"release"`
+	AppOfApps           string                     `yaml:"appOfApps"`
+	RepoSecret          *RepoSecretConfig          `yaml:"repoSecret,omitempty"`
+	BitbucketRepoSecret *BitbucketRepoSecretConfig `yaml:"bitbucketRepoSecret,omitempty"`
+	ApplicationsToPrune []string                   `yaml:"applicationsToPrune,omitempty"`
 }
 
-// RepoSecretConfig holds private repo credentials for ArgoCD.
+// RepoSecretConfig holds SSH private repo credentials for ArgoCD.
 type RepoSecretConfig struct {
 	Name       string `yaml:"name"`
 	URL        string `yaml:"url"`
 	SSHKeyPath string `yaml:"sshKeyPath"`
+}
+
+// BitbucketRepoSecretConfig holds Bitbucket HTTPS credentials for ArgoCD.
+type BitbucketRepoSecretConfig struct {
+	Name     string `yaml:"name"`
+	URL      string `yaml:"url"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"` // app password or token
 }
 
 // LoadK3dConfig reads and parses a k3d YAML config file.
@@ -144,8 +153,17 @@ func LoadK3dConfig(filepath string) (*K3dConfig, error) {
 // ---------- Cluster lifecycle ----------
 
 // ClusterCreate creates the k3d cluster defined in config.
+// If a cluster with the same name already exists it is left untouched and the
+// call returns nil (idempotent — safe to call from Up even after a partial run).
 func (k *K3dRunner) ClusterCreate() error {
 	c := k.config.Cluster
+
+	// Check whether the cluster already exists.
+	if k.clusterExists(c.Name) {
+		slog.Info("⏭️  Cluster already exists, skipping create", "name", c.Name)
+		return nil
+	}
+
 	slog.Info("🚀 Creating k3d cluster", "name", c.Name, "servers", c.Servers, "agents", c.Agents)
 	start := time.Now()
 
@@ -160,6 +178,10 @@ func (k *K3dRunner) ClusterCreate() error {
 	for _, a := range c.K3sArgs {
 		args = append(args, "--k3s-arg", a)
 	}
+	if c.RegistryConfig != "" {
+		slog.Info("🔧 Using registry config", "path", c.RegistryConfig)
+		args = append(args, "--registry-config", c.RegistryConfig)
+	}
 
 	if err := k.executor.Run(context.Background(), "k3d", false, args...); err != nil {
 		return fmt.Errorf("failed to create cluster %s: %w", c.Name, err)
@@ -167,6 +189,12 @@ func (k *K3dRunner) ClusterCreate() error {
 
 	slog.Info("✅ Cluster created", "name", c.Name, "duration", time.Since(start))
 	return nil
+}
+
+// clusterExists returns true if a k3d cluster with the given name is already present.
+func (k *K3dRunner) clusterExists(name string) bool {
+	err := k.executor.Run(context.Background(), "k3d", true, "cluster", "get", name)
+	return err == nil
 }
 
 // ClusterDelete deletes the k3d cluster.
@@ -371,10 +399,41 @@ func (k *K3dRunner) CreateRepoSecret() error {
 	return nil
 }
 
-// CreateBitbucketRepoSecret creates ArgoCD repo secret for Bitbucket using the configured SSH key.
-// It reuses the same behavior as CreateRepoSecret to keep credentials handling in one place.
+// CreateBitbucketRepoSecret creates a Kubernetes secret so ArgoCD can access a private Bitbucket repo via HTTPS.
 func (k *K3dRunner) CreateBitbucketRepoSecret() error {
-	return k.CreateRepoSecret()
+	if k.config.ArgoCD == nil || k.config.ArgoCD.BitbucketRepoSecret == nil {
+		slog.Info("⏭️  No argocd.bitbucketRepoSecret configured, skipping")
+		return nil
+	}
+	rs := k.config.ArgoCD.BitbucketRepoSecret
+
+	slog.Info("🔑 Creating ArgoCD Bitbucket repo secret", "name", rs.Name, "url", rs.URL)
+
+	// Delete existing secret if present (ignore error)
+	_ = k.k8s.Delete(k8sx.DeleteOptions{Namespace: "argocd"}, "secret", rs.Name)
+
+	if err := k.k8s.CreateSecret(k8sx.CreateSecretOptions{
+		Name:      rs.Name,
+		Namespace: "argocd",
+		Type:      "generic",
+		FromLiteral: []string{
+			"type=git",
+			"url=" + rs.URL,
+			"username=" + rs.Username,
+			"password=" + rs.Password,
+		},
+	}); err != nil {
+		return fmt.Errorf("failed to create Bitbucket repo secret: %w", err)
+	}
+
+	if err := k.k8s.Label("secret", rs.Name, "argocd", map[string]string{
+		"argocd.argoproj.io/secret-type": "repository",
+	}, true); err != nil {
+		return fmt.Errorf("failed to label Bitbucket repo secret: %w", err)
+	}
+
+	slog.Info("✅ Bitbucket repo secret created", "name", rs.Name)
+	return nil
 }
 
 // ApplyAppOfApps applies the ArgoCD app-of-apps manifest.
