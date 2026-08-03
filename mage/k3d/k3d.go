@@ -33,6 +33,32 @@ func ensureLoaded() error {
 	return nil
 }
 
+// ---------- Registry ----------
+
+// RegistryCreate creates the k3d local registry defined in the configuration.
+func RegistryCreate() error {
+	if err := ensureLoaded(); err != nil {
+		return err
+	}
+	return defaultRunner.RegistryCreate()
+}
+
+// RegistryDelete deletes the k3d local registry.
+func RegistryDelete() error {
+	if err := ensureLoaded(); err != nil {
+		return err
+	}
+	return defaultRunner.RegistryDelete()
+}
+
+// RegistryList lists all k3d registries.
+func RegistryList() error {
+	if err := ensureLoaded(); err != nil {
+		return err
+	}
+	return defaultRunner.RegistryList()
+}
+
 // ---------- Cluster ----------
 
 // ClusterCreate creates the k3d cluster.

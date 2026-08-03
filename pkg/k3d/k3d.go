@@ -1,4 +1,4 @@
-package k3dx
+package k3d
 
 import (
 	"context"
@@ -75,16 +75,45 @@ type K3dConfig struct {
 	HelmRepos      map[string]string   `yaml:"helmRepos"`
 	Releases       []ReleaseConfig     `yaml:"releases"`
 	ArgoCD         *ArgoCDConfig       `yaml:"argocd,omitempty"`
+	Registry       *RegistryConfig     `yaml:"registry,omitempty"`
+}
+
+// RegistryConfig holds local k3d registry creation settings
+type RegistryConfig struct {
+	Name string `yaml:"name"`
+	Port string `yaml:"port"`
+	Host string `yaml:"host,omitempty"`
 }
 
 // ClusterConfig holds k3d cluster creation settings.
 type ClusterConfig struct {
-	Name           string   `yaml:"name"`
-	Servers        int      `yaml:"servers"`
-	Agents         int      `yaml:"agents"`
-	Ports          []string `yaml:"ports,omitempty"`
-	K3sArgs        []string `yaml:"k3sArgs,omitempty"`
-	RegistryConfig string   `yaml:"registryConfig,omitempty"`
+	Name           string            `yaml:"name"`
+	Servers        int               `yaml:"servers"`
+	Agents         int               `yaml:"agents"`
+	Ports          []string          `yaml:"ports,omitempty"`
+	K3sArgs        []string          `yaml:"k3sArgs,omitempty"`
+	RegistryConfig string            `yaml:"registryConfig,omitempty"`
+	RegistryUse    string            `yaml:"registryUse,omitempty"`
+	Registries     *RegistriesConfig `yaml:"registries,omitempty"`
+	Volumes        []VolumeMount     `yaml:"volumes,omitempty"`
+}
+
+// RegistriesConfig holds registry configuration for k3d
+type RegistriesConfig struct {
+	Create *RegistryCreateConfig `yaml:"create,omitempty"`
+}
+
+// RegistryCreateConfig defines a registry to be created
+type RegistryCreateConfig struct {
+	Name     string `yaml:"name"`
+	Host     string `yaml:"host"`
+	HostPort string `yaml:"hostPort"`
+}
+
+// VolumeMount represents a volume mount configuration for k3d nodes
+type VolumeMount struct {
+	Volume      string   `yaml:"volume"`      // source:destination format
+	NodeFilters []string `yaml:"nodeFilters"` // filter nodes (e.g., "server:*", "agent:*")
 }
 
 // StorageClassConfig defines an optional StorageClass to create after cluster bootstrap.
@@ -152,6 +181,62 @@ func LoadK3dConfig(filepath string) (*K3dConfig, error) {
 
 // ---------- Cluster lifecycle ----------
 
+// RegistryCreate creates the k3d local registry defined in config.
+// If a registry with the same name already exists it is left untouched and the
+// call returns nil (idempotent — safe to call even after a partial run).
+func (k *K3dRunner) RegistryCreate() error {
+	if k.config.Registry == nil {
+		slog.Info("⏭️  No registry config, skipping registry creation")
+		return nil
+	}
+
+	reg := k.config.Registry
+	if k.registryExists(reg.Name) {
+		slog.Info("⏭️  Registry already exists, skipping create", "name", reg.Name)
+		return nil
+	}
+
+	slog.Info("🏗️  Creating k3d local registry", "name", reg.Name, "port", reg.Port)
+	start := time.Now()
+
+	args := []string{"registry", "create", reg.Name, "--port", reg.Port}
+
+	if err := k.executor.Run(context.Background(), "k3d", false, args...); err != nil {
+		return fmt.Errorf("failed to create registry %s: %w", reg.Name, err)
+	}
+
+	slog.Info("✅ Registry created", "name", reg.Name, "port", reg.Port, "duration", time.Since(start))
+	return nil
+}
+
+// registryExists returns true if a k3d registry with the given name already exists.
+func (k *K3dRunner) registryExists(name string) bool {
+	err := k.executor.Run(context.Background(), "k3d", true, "registry", "get", name)
+	return err == nil
+}
+
+// RegistryDelete deletes the k3d local registry.
+func (k *K3dRunner) RegistryDelete() error {
+	if k.config.Registry == nil {
+		return nil
+	}
+
+	name := k.config.Registry.Name
+	slog.Info("🗑️  Deleting k3d registry", "name", name)
+
+	if err := k.executor.Run(context.Background(), "k3d", false, "registry", "delete", name); err != nil {
+		return fmt.Errorf("failed to delete registry %s: %w", name, err)
+	}
+
+	slog.Info("✅ Registry deleted", "name", name)
+	return nil
+}
+
+// RegistryList lists k3d registries.
+func (k *K3dRunner) RegistryList() error {
+	return k.executor.Run(context.Background(), "k3d", false, "registry", "list")
+}
+
 // ClusterCreate creates the k3d cluster defined in config.
 // If a cluster with the same name already exists it is left untouched and the
 // call returns nil (idempotent — safe to call from Up even after a partial run).
@@ -181,6 +266,27 @@ func (k *K3dRunner) ClusterCreate() error {
 	if c.RegistryConfig != "" {
 		slog.Info("🔧 Using registry config", "path", c.RegistryConfig)
 		args = append(args, "--registry-config", c.RegistryConfig)
+	}
+
+	if c.RegistryUse != "" {
+		slog.Info("🔧 Using local registry", "address", c.RegistryUse)
+		args = append(args, "--registry-use", c.RegistryUse)
+	}
+
+	// Add registry creation if configured
+	if c.Registries != nil && c.Registries.Create != nil {
+		reg := c.Registries.Create
+		slog.Info("🔧 Creating registry", "name", reg.Name, "host", reg.Host, "hostPort", reg.HostPort)
+		args = append(args, "--registry-create", fmt.Sprintf("%s:%s:%s", reg.Name, reg.Host, reg.HostPort))
+	}
+
+	// Add volume mounts for CA certificates and other files
+	for _, vol := range c.Volumes {
+		// Expand environment variables in volume path
+		expandedVolume := os.ExpandEnv(vol.Volume)
+		for _, filter := range vol.NodeFilters {
+			args = append(args, "-v", expandedVolume+"@"+filter)
+		}
 	}
 
 	if err := k.executor.Run(context.Background(), "k3d", false, args...); err != nil {
@@ -456,12 +562,13 @@ func (k *K3dRunner) PatchApplication(name, patchType, patch string) error {
 
 // ---------- Composite workflows ----------
 
-// Up creates cluster, adds repos, bootstraps, and installs all releases.
+// Up creates registry, cluster, adds repos, bootstraps, and installs all releases.
 func (k *K3dRunner) Up() error {
 	steps := []struct {
 		name string
 		fn   func() error
 	}{
+		{"RegistryCreate", k.RegistryCreate},
 		{"ClusterCreate", k.ClusterCreate},
 		{"HelmRepos", k.HelmRepos},
 		{"Bootstrap", k.Bootstrap},
