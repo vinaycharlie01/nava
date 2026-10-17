@@ -42,6 +42,7 @@ type CommandCreator interface {
 type Executor interface {
 	Run(ctx context.Context, command string, streamToLog bool, args ...string) error
 	RunInDir(ctx context.Context, dir, command string, streamToLog bool, args ...string) error
+	RunWithStdin(ctx context.Context, command string, stdinData string, args ...string) error
 }
 
 // ExecCmd wraps *exec.Cmd to implement the Commander interface

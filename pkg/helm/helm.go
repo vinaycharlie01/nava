@@ -55,16 +55,18 @@ func (h *HelmRunner) LoadConfig(filepath string) error {
 
 // HelmConfig contains all Helm operation configurations
 type HelmConfig struct {
-	Install    *InstallOptions    `yaml:"install,omitempty"`
-	Upgrade    *UpgradeOptions    `yaml:"upgrade,omitempty"`
-	Uninstall  *UninstallOptions  `yaml:"uninstall,omitempty"`
-	List       *ListOptions       `yaml:"list,omitempty"`
-	Status     *StatusOptions     `yaml:"status,omitempty"`
-	Template   *TemplateOptions   `yaml:"template,omitempty"`
-	Lint       *LintOptions       `yaml:"lint,omitempty"`
-	Package    *PackageOptions    `yaml:"package,omitempty"`
-	RepoAdd    *RepoAddOptions    `yaml:"repoAdd,omitempty"`
-	RepoUpdate *RepoUpdateOptions `yaml:"repoUpdate,omitempty"`
+	Install       *InstallOptions       `yaml:"install,omitempty"`
+	Upgrade       *UpgradeOptions       `yaml:"upgrade,omitempty"`
+	Uninstall     *UninstallOptions     `yaml:"uninstall,omitempty"`
+	List          *ListOptions          `yaml:"list,omitempty"`
+	Status        *StatusOptions        `yaml:"status,omitempty"`
+	Template      *TemplateOptions      `yaml:"template,omitempty"`
+	Lint          *LintOptions          `yaml:"lint,omitempty"`
+	Package       *PackageOptions       `yaml:"package,omitempty"`
+	Push          *PushOptions          `yaml:"push,omitempty"`
+	RegistryLogin *RegistryLoginOptions `yaml:"registryLogin,omitempty"`
+	RepoAdd       *RepoAddOptions       `yaml:"repoAdd,omitempty"`
+	RepoUpdate    *RepoUpdateOptions    `yaml:"repoUpdate,omitempty"`
 }
 
 // LoadHelmConfig loads Helm configuration from a YAML file
@@ -448,6 +450,94 @@ func (h *HelmRunner) Package() error {
 	}
 
 	slog.Info("✅ Helm chart packaged", "duration", time.Since(start))
+	return nil
+}
+
+// PushOptions contains options for helm push (OCI registry)
+type PushOptions struct {
+	Chart    string   `yaml:"chart"`
+	Registry string   `yaml:"registry"`
+	Args     []string `yaml:"args,omitempty"`
+}
+
+// Push pushes a packaged chart to an OCI registry using loaded configuration
+func (h *HelmRunner) Push() error {
+	if h.config == nil || h.config.Push == nil {
+		return fmt.Errorf("push configuration not loaded")
+	}
+	opts := h.config.Push
+	return h.PushChart(opts.Chart, opts.Registry, opts.Args...)
+}
+
+// PushChart pushes a packaged chart archive to an OCI registry.
+func (h *HelmRunner) PushChart(chart, registry string, args ...string) error {
+	if chart == "" {
+		return fmt.Errorf("chart archive path is required")
+	}
+	if registry == "" {
+		return fmt.Errorf("registry URL is required")
+	}
+
+	slog.Info("Pushing Helm chart to OCI registry...", "chart", chart, "registry", registry)
+
+	start := time.Now()
+
+	cmdArgs := []string{"push", chart, registry}
+	cmdArgs = append(cmdArgs, args...)
+
+	if err := h.executor.Run(context.Background(), "helm", false, cmdArgs...); err != nil {
+		return err
+	}
+
+	slog.Info("Helm chart pushed", "duration", time.Since(start))
+	return nil
+}
+
+// RegistryLoginOptions contains options for helm registry login
+type RegistryLoginOptions struct {
+	Registry string `yaml:"registry"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+// RegistryLogin authenticates to an OCI registry using loaded configuration
+func (h *HelmRunner) RegistryLogin() error {
+	if h.config == nil || h.config.RegistryLogin == nil {
+		return fmt.Errorf("registryLogin configuration not loaded")
+	}
+	opts := h.config.RegistryLogin
+	return h.RegistryLoginTo(opts.Registry, opts.Username, opts.Password)
+}
+
+// RegistryLoginTo authenticates to an OCI registry with explicit credentials.
+func (h *HelmRunner) RegistryLoginTo(registry, username, password string) error {
+	if registry == "" {
+		return fmt.Errorf("registry URL is required")
+	}
+
+	slog.Info("Logging in to Helm OCI registry...", "registry", registry)
+
+	start := time.Now()
+
+	cmdArgs := []string{"registry", "login", registry}
+	if username != "" {
+		cmdArgs = append(cmdArgs, "--username", username)
+	}
+	if password != "" {
+		cmdArgs = append(cmdArgs, "--password-stdin")
+	}
+
+	if password != "" {
+		if err := h.executor.RunWithStdin(context.Background(), "helm", password, cmdArgs...); err != nil {
+			return err
+		}
+	} else {
+		if err := h.executor.Run(context.Background(), "helm", false, cmdArgs...); err != nil {
+			return err
+		}
+	}
+
+	slog.Info("Helm registry login successful", "duration", time.Since(start))
 	return nil
 }
 
