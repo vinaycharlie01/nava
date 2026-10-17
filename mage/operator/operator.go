@@ -9,6 +9,11 @@ import (
 // defaultRunner is the package-level runner used by all convenience functions.
 var defaultRunner = operatorx.NewOperatorRunner()
 
+// LoadConfig loads operator configuration from a YAML file into the default runner.
+func LoadConfig(path string) error {
+	return defaultRunner.LoadConfig(path)
+}
+
 // SetLocalBin overrides the directory where tool binaries are cached (default: ./bin).
 func SetLocalBin(dir string) {
 	defaultRunner.LocalBin = dir
@@ -39,9 +44,29 @@ func GenerateManifests() error {
 }
 
 // GenerateCode runs controller-gen to produce DeepCopy methods.
-// boilerplate defaults to "hack/boilerplate.go.txt" when empty.
+// When boilerplate is empty, no headerFile argument is passed (bare object generation).
 func GenerateCode(boilerplate string) error {
 	return defaultRunner.GenerateCode(boilerplate)
+}
+
+// GenerateAll runs DeepCopy generation, manifest generation, and CRD sync in one call.
+func GenerateAll(boilerplate, helmCRDDir string) error {
+	return defaultRunner.GenerateAll(boilerplate, helmCRDDir)
+}
+
+// GenerateFromConfig runs code generation using loaded YAML config values.
+func GenerateFromConfig() error {
+	return defaultRunner.GenerateFromConfig()
+}
+
+// GenerateAndSync generates manifests and copies CRDs to the Helm chart crds/ directory.
+func GenerateAndSync(helmCRDDir string) error {
+	return defaultRunner.GenerateAndSync(helmCRDDir)
+}
+
+// SyncCRDs copies CRD files from srcDir to the Helm chart destDir.
+func SyncCRDs(srcDir, destDir string) error {
+	return defaultRunner.SyncCRDs(srcDir, destDir)
 }
 
 // ─── Deployment ──────────────────────────────────────────────────────────────
@@ -70,6 +95,19 @@ func Undeploy() error {
 // BuildInstaller generates dist/install.yaml (all CRDs + Deployment in one file).
 func BuildInstaller(image string) error {
 	return defaultRunner.BuildInstaller(image)
+}
+
+// ─── Clean ───────────────────────────────────────────────────────────────────
+
+// Clean removes build artifacts. Uses config.Clean.Paths when loaded; otherwise
+// removes the supplied paths.
+func Clean(paths ...string) error {
+	return defaultRunner.Clean(paths...)
+}
+
+// CleanFromConfig removes build artifacts using the loaded YAML config.
+func CleanFromConfig() error {
+	return defaultRunner.CleanFromConfig()
 }
 
 // ─── Testing ─────────────────────────────────────────────────────────────────

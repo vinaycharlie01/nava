@@ -57,6 +57,11 @@ func Package() error {
 	return defaultRunner.Package()
 }
 
+// Push packages and pushes the chart to an OCI registry (requires loaded config)
+func Push() error {
+	return defaultRunner.Push()
+}
+
 // RepoAdd adds a chart repository (requires loaded config)
 func RepoAdd() error {
 	return defaultRunner.RepoAdd()

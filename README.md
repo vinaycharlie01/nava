@@ -118,6 +118,16 @@ list:
 
 lint:
   chart: ./charts/example
+  # args: ["--strict"]
+
+package:
+  chart: ./charts/example
+  destination: .helm-pkg      # optional: --destination dir (auto-created)
+
+push:
+  chart: ./charts/example
+  registry: oci://ghcr.io/your-org/helm-charts
+  # destination: .helm-pkg    # temp packaging dir (default: .helm-pkg)
 ```
 
 | Target              | Reads section | Description                          |
@@ -127,11 +137,14 @@ lint:
 | `mage helm:uninstall` | `uninstall` | `helm uninstall`                     |
 | `mage helm:list`    | `list`        | `helm list`                          |
 | `mage helm:lint`    | `lint`        | `helm lint`                          |
+| `mage helm:package` | `package`     | `helm package [--destination ...]`   |
+| `mage helm:push`    | `push`        | `helm package` + `helm push` to OCI  |
 | `mage helm:repoUpdate` | `repoUpdate` (optional) | `helm repo update`        |
 
 > The `pkg/helm` runner also exposes programmatic helpers
-> (`UpgradeWith`, `UninstallRelease`, `RepoAddNamed`) used by `pkg/k3d` to drive
-> Helm dynamically per release.
+> (`UpgradeWith`, `UninstallRelease`, `RepoAddNamed`, `LintWith`,
+> `PackageWith`, `PushWith`) used by `pkg/k3d` and operator Magefiles to drive
+> Helm dynamically.
 
 ---
 
@@ -173,16 +186,17 @@ publish:
 The same `LoadConfig` + zero-arg pattern is implemented for these tools (see
 each package's `pkg/<tool>` config struct for the YAML schema):
 
-| Namespace | Package        | Highlights                                             |
-| --------- | -------------- | ------------------------------------------------------ |
-| `docker`  | `mage/docker`  | build, push, pull, buildx, compose up/down, run/exec   |
-| `k3d`     | `mage/k3d`     | cluster up/down, bootstrap, ArgoCD GitOps, releases    |
-| `sops`    | `mage/sops`    | init, encrypt/decrypt, age key generation              |
-| `golang`  | `mage/golang`  | setup, build, run, test, lint, vet, fmt                |
-| `nodejs`  | `mage/nodejs`  | setup, build, test, dev, preview, lint, format         |
-| `python`  | `mage/python`  | setup, run service/script, tests, lint, format         |
-| `rust`    | `mage/rust`    | setup, build, run, test, lint, format, codegen         |
-| `git`     | `mage/git`     | commit SHA, branch, tag, version helpers               |
+| Namespace  | Package         | Highlights                                             |
+| ---------- | --------------- | ------------------------------------------------------ |
+| `docker`   | `mage/docker`   | build, push, pull, buildx, compose up/down, run/exec   |
+| `k3d`      | `mage/k3d`      | cluster up/down, bootstrap, ArgoCD GitOps, releases    |
+| `sops`     | `mage/sops`     | init, encrypt/decrypt, age key generation              |
+| `golang`   | `mage/golang`   | setup, build, run, test, integration, lint, vet, fmt, cross-build |
+| `operator` | `mage/operator` | controller-gen, kustomize, envtest, CRD sync to Helm   |
+| `nodejs`   | `mage/nodejs`   | setup, build, test, dev, preview, lint, format         |
+| `python`   | `mage/python`   | setup, run service/script, tests, lint, format         |
+| `rust`     | `mage/rust`     | setup, build, run, test, lint, format, codegen         |
+| `git`      | `mage/git`      | commit SHA, branch, tag, version helpers               |
 
 Run `mage -l` to see the full list of targets wired up in `magefile.go`.
 
