@@ -255,6 +255,62 @@ func (o *OperatorRunner) BuildInstaller(image string) error {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CRD sync
+// ─────────────────────────────────────────────────────────────────────────────
+
+// SyncCRDs copies CRD files from the controller-gen output directory to a Helm chart crds/ directory.
+func (o *OperatorRunner) SyncCRDs(srcDir, destDir string) error {
+	if srcDir == "" {
+		srcDir = "config/crd/bases"
+	}
+	if destDir == "" {
+		return fmt.Errorf("destDir (Helm chart crds/ path) is required")
+	}
+
+	slog.Info("🔄 Syncing CRDs to Helm chart...", "src", srcDir, "dst", destDir)
+	start := time.Now()
+
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", destDir, err)
+	}
+
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("read CRD dir %s: %w", srcDir, err)
+	}
+
+	copied := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if len(name) < 5 || name[len(name)-5:] != ".yaml" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(srcDir, name))
+		if err != nil {
+			return fmt.Errorf("read CRD %s: %w", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(destDir, name), data, 0o644); err != nil {
+			return fmt.Errorf("write CRD %s: %w", name, err)
+		}
+		copied++
+	}
+
+	slog.Info("✅ CRDs synced to Helm chart", "count", copied, "duration", time.Since(start))
+	return nil
+}
+
+// GenerateAndSync runs GenerateManifests then copies CRDs to the Helm chart.
+func (o *OperatorRunner) GenerateAndSync(helmCRDDir string) error {
+	if err := o.GenerateManifests(); err != nil {
+		return err
+	}
+	return o.SyncCRDs("config/crd/bases", helmCRDDir)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // setup-envtest
 // ─────────────────────────────────────────────────────────────────────────────
 

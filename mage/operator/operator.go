@@ -72,6 +72,18 @@ func BuildInstaller(image string) error {
 	return defaultRunner.BuildInstaller(image)
 }
 
+// ─── CRD sync ───────────────────────────────────────────────────────────────
+
+// SyncCRDs copies CRD files from srcDir to the Helm chart destDir.
+func SyncCRDs(srcDir, destDir string) error {
+	return defaultRunner.SyncCRDs(srcDir, destDir)
+}
+
+// GenerateAndSync runs GenerateManifests then copies CRDs to the Helm chart.
+func GenerateAndSync(helmCRDDir string) error {
+	return defaultRunner.GenerateAndSync(helmCRDDir)
+}
+
 // ─── Testing ─────────────────────────────────────────────────────────────────
 
 // EnvtestAssets downloads envtest binaries for the given Kubernetes version

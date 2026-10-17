@@ -63,6 +63,7 @@ type HelmConfig struct {
 	Template   *TemplateOptions   `yaml:"template,omitempty"`
 	Lint       *LintOptions       `yaml:"lint,omitempty"`
 	Package    *PackageOptions    `yaml:"package,omitempty"`
+	Push       *PushOptions       `yaml:"push,omitempty"`
 	RepoAdd    *RepoAddOptions    `yaml:"repoAdd,omitempty"`
 	RepoUpdate *RepoUpdateOptions `yaml:"repoUpdate,omitempty"`
 }
@@ -400,7 +401,11 @@ func (h *HelmRunner) Lint() error {
 	if h.config == nil || h.config.Lint == nil {
 		return fmt.Errorf("lint configuration not loaded")
 	}
-	opts := h.config.Lint
+	return h.LintWith(*h.config.Lint)
+}
+
+// LintWith lints a chart with the supplied options.
+func (h *HelmRunner) LintWith(opts LintOptions) error {
 	if opts.Chart == "" {
 		return fmt.Errorf("chart path is required")
 	}
@@ -422,8 +427,9 @@ func (h *HelmRunner) Lint() error {
 
 // PackageOptions contains options for helm package
 type PackageOptions struct {
-	Chart string   `yaml:"chart"`
-	Args  []string `yaml:"args,omitempty"`
+	Chart       string   `yaml:"chart"`
+	Destination string   `yaml:"destination,omitempty"` // --destination directory
+	Args        []string `yaml:"args,omitempty"`
 }
 
 // Package packages a chart directory into a chart archive using loaded configuration
@@ -431,16 +437,29 @@ func (h *HelmRunner) Package() error {
 	if h.config == nil || h.config.Package == nil {
 		return fmt.Errorf("package configuration not loaded")
 	}
-	opts := h.config.Package
+	return h.PackageWith(*h.config.Package)
+}
+
+// PackageWith packages a chart with the supplied options.
+func (h *HelmRunner) PackageWith(opts PackageOptions) error {
 	if opts.Chart == "" {
 		return fmt.Errorf("chart path is required")
 	}
 
-	slog.Info("📦 Packaging Helm chart...", "chart", opts.Chart)
+	slog.Info("📦 Packaging Helm chart...", "chart", opts.Chart, "destination", opts.Destination)
 
 	start := time.Now()
 
+	if opts.Destination != "" {
+		if err := os.MkdirAll(opts.Destination, 0o755); err != nil {
+			return fmt.Errorf("create destination dir: %w", err)
+		}
+	}
+
 	cmdArgs := []string{"package", opts.Chart}
+	if opts.Destination != "" {
+		cmdArgs = append(cmdArgs, "--destination", opts.Destination)
+	}
 	cmdArgs = append(cmdArgs, opts.Args...)
 
 	if err := h.executor.Run(context.Background(), "helm", false, cmdArgs...); err != nil {
@@ -448,6 +467,79 @@ func (h *HelmRunner) Package() error {
 	}
 
 	slog.Info("✅ Helm chart packaged", "duration", time.Since(start))
+	return nil
+}
+
+// PushOptions contains options for helm push (OCI registries)
+type PushOptions struct {
+	Chart       string `yaml:"chart"`                 // Chart directory to package
+	Destination string `yaml:"destination,omitempty"`  // Temp packaging directory (default: .helm-pkg)
+	Registry    string `yaml:"registry"`               // OCI registry URL (e.g. oci://ghcr.io/org/charts)
+	Args        []string `yaml:"args,omitempty"`
+}
+
+// Push packages and pushes a chart to an OCI registry using loaded configuration
+func (h *HelmRunner) Push() error {
+	if h.config == nil || h.config.Push == nil {
+		return fmt.Errorf("push configuration not loaded")
+	}
+	return h.PushWith(*h.config.Push)
+}
+
+// PushWith packages and pushes a chart with the supplied options.
+func (h *HelmRunner) PushWith(opts PushOptions) error {
+	if opts.Chart == "" {
+		return fmt.Errorf("chart path is required")
+	}
+	if opts.Registry == "" {
+		return fmt.Errorf("registry URL is required")
+	}
+
+	dest := opts.Destination
+	if dest == "" {
+		dest = ".helm-pkg"
+	}
+
+	slog.Info("📤 Packaging and pushing Helm chart to OCI registry...",
+		"chart", opts.Chart,
+		"registry", opts.Registry,
+	)
+
+	start := time.Now()
+
+	// Package the chart
+	pkgOpts := PackageOptions{
+		Chart:       opts.Chart,
+		Destination: dest,
+	}
+	if err := h.PackageWith(pkgOpts); err != nil {
+		return fmt.Errorf("package before push: %w", err)
+	}
+
+	// Find the packaged .tgz
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		return fmt.Errorf("read package dir: %w", err)
+	}
+	var tgz string
+	for _, e := range entries {
+		if !e.IsDir() && len(e.Name()) > 4 && e.Name()[len(e.Name())-4:] == ".tgz" {
+			tgz = dest + "/" + e.Name()
+		}
+	}
+	if tgz == "" {
+		return fmt.Errorf("no .tgz found in %s after packaging", dest)
+	}
+
+	// Push
+	cmdArgs := []string{"push", tgz, opts.Registry}
+	cmdArgs = append(cmdArgs, opts.Args...)
+
+	if err := h.executor.Run(context.Background(), "helm", false, cmdArgs...); err != nil {
+		return err
+	}
+
+	slog.Info("✅ Helm chart pushed", "registry", opts.Registry, "duration", time.Since(start))
 	return nil
 }
 
