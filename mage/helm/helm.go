@@ -66,3 +66,13 @@ func RepoAdd() error {
 func RepoUpdate() error {
 	return defaultRunner.RepoUpdate()
 }
+
+// Push pushes a packaged chart to an OCI registry (requires loaded config)
+func Push() error {
+	return defaultRunner.Push()
+}
+
+// RegistryLogin authenticates to an OCI registry (requires loaded config)
+func RegistryLogin() error {
+	return defaultRunner.RegistryLogin()
+}
