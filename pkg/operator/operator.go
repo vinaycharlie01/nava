@@ -11,17 +11,40 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
 	execx "github.com/nirantaraai/nava/pkg/exec"
+	"gopkg.in/yaml.v3"
 )
+
+// OperatorConfig holds YAML-driven configuration for operator targets.
+type OperatorConfig struct {
+	LocalBin string          `yaml:"localBin,omitempty"`
+	Generate *GenerateConfig `yaml:"generate,omitempty"`
+	Clean    *CleanConfig    `yaml:"clean,omitempty"`
+}
+
+// GenerateConfig holds options for code/manifest generation.
+type GenerateConfig struct {
+	Boilerplate string `yaml:"boilerplate,omitempty"`
+	HelmCRDDir  string `yaml:"helmCRDDir,omitempty"`
+	CRDSrcDir   string `yaml:"crdSrcDir,omitempty"`
+	APIPaths    string `yaml:"apiPaths,omitempty"`
+}
+
+// CleanConfig holds paths to clean up.
+type CleanConfig struct {
+	Paths []string `yaml:"paths,omitempty"`
+}
 
 // OperatorRunner wraps controller-gen, kustomize, and setup-envtest.
 type OperatorRunner struct {
 	executor execx.Executor
 	// LocalBin is the directory where tool binaries are downloaded (default: ./bin).
 	LocalBin string
+	config   *OperatorConfig
 }
 
 // NewOperatorRunner creates a new OperatorRunner with the default executor and ./bin as LocalBin.
@@ -37,19 +60,73 @@ func NewOperatorRunnerWithExecutor(executor execx.Executor, localBin string) *Op
 	return &OperatorRunner{executor: executor, LocalBin: localBin}
 }
 
-// controllerGen returns the path to the controller-gen binary inside LocalBin.
+// LoadConfig loads operator configuration from a YAML file.
+func (o *OperatorRunner) LoadConfig(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read operator config: %w", err)
+	}
+	var cfg OperatorConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("failed to unmarshal operator config: %w", err)
+	}
+	o.config = &cfg
+	if cfg.LocalBin != "" {
+		o.LocalBin = cfg.LocalBin
+	}
+	return nil
+}
+
+// LoadOperatorConfig loads operator configuration from a YAML file.
+func LoadOperatorConfig(path string) (*OperatorConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read operator config: %w", err)
+	}
+	var cfg OperatorConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal operator config: %w", err)
+	}
+	return &cfg, nil
+}
+
+// controllerGen returns the path to the controller-gen binary.
+// It checks LocalBin first, then falls back to PATH lookup.
 func (o *OperatorRunner) controllerGen() string {
-	return filepath.Join(o.LocalBin, "controller-gen")
+	localPath := filepath.Join(o.LocalBin, "controller-gen")
+	if _, err := os.Stat(localPath); err == nil {
+		return localPath
+	}
+	if p, err := exec.LookPath("controller-gen"); err == nil {
+		return p
+	}
+	return localPath
 }
 
-// kustomize returns the path to the kustomize binary inside LocalBin.
+// kustomize returns the path to the kustomize binary.
+// It checks LocalBin first, then falls back to PATH lookup.
 func (o *OperatorRunner) kustomize() string {
-	return filepath.Join(o.LocalBin, "kustomize")
+	localPath := filepath.Join(o.LocalBin, "kustomize")
+	if _, err := os.Stat(localPath); err == nil {
+		return localPath
+	}
+	if p, err := exec.LookPath("kustomize"); err == nil {
+		return p
+	}
+	return localPath
 }
 
-// envtest returns the path to the setup-envtest binary inside LocalBin.
+// envtest returns the path to the setup-envtest binary.
+// It checks LocalBin first, then falls back to PATH lookup.
 func (o *OperatorRunner) envtest() string {
-	return filepath.Join(o.LocalBin, "setup-envtest")
+	localPath := filepath.Join(o.LocalBin, "setup-envtest")
+	if _, err := os.Stat(localPath); err == nil {
+		return localPath
+	}
+	if p, err := exec.LookPath("setup-envtest"); err == nil {
+		return p
+	}
+	return localPath
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -124,23 +201,62 @@ func (o *OperatorRunner) GenerateManifests() error {
 }
 
 // GenerateCode runs controller-gen to produce DeepCopy/DeepCopyInto/DeepCopyObject methods.
-//
-//	equivalent to: controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
+// When boilerplate is empty, no headerFile argument is passed (bare object generation).
+// When boilerplate is non-empty, it is used as the headerFile path.
 func (o *OperatorRunner) GenerateCode(boilerplate string) error {
-	if boilerplate == "" {
-		boilerplate = "hack/boilerplate.go.txt"
-	}
 	slog.Info("🔧 Generating DeepCopy code...", "boilerplate", boilerplate)
 	start := time.Now()
-	err := o.executor.Run(context.Background(), o.controllerGen(), false,
-		fmt.Sprintf(`object:headerFile="%s"`, boilerplate),
-		`paths=./...`,
-	)
+
+	args := []string{}
+	if boilerplate != "" {
+		args = append(args, fmt.Sprintf(`object:headerFile=%s`, boilerplate))
+	} else {
+		args = append(args, `object`)
+	}
+
+	paths := "./..."
+	if o.config != nil && o.config.Generate != nil && o.config.Generate.APIPaths != "" {
+		paths = o.config.Generate.APIPaths
+	}
+	args = append(args, fmt.Sprintf(`paths=%s`, paths))
+
+	err := o.executor.Run(context.Background(), o.controllerGen(), false, args...)
 	if err != nil {
 		return fmt.Errorf("controller-gen generate: %w", err)
 	}
 	slog.Info("✅ DeepCopy code generated", "duration", time.Since(start))
 	return nil
+}
+
+// GenerateAll runs DeepCopy generation, manifest generation, and CRD sync in one call.
+// It uses config values when available, falling back to supplied parameters.
+func (o *OperatorRunner) GenerateAll(boilerplate, helmCRDDir string) error {
+	bp := boilerplate
+	hcd := helmCRDDir
+	if o.config != nil && o.config.Generate != nil {
+		if bp == "" {
+			bp = o.config.Generate.Boilerplate
+		}
+		if hcd == "" {
+			hcd = o.config.Generate.HelmCRDDir
+		}
+	}
+
+	if err := o.GenerateCode(bp); err != nil {
+		return err
+	}
+	if hcd != "" {
+		return o.GenerateAndSync(hcd)
+	}
+	return o.GenerateManifests()
+}
+
+// GenerateFromConfig runs GenerateAll using loaded config values.
+func (o *OperatorRunner) GenerateFromConfig() error {
+	if o.config == nil || o.config.Generate == nil {
+		return fmt.Errorf("no generate configuration loaded")
+	}
+	return o.GenerateAll(o.config.Generate.Boilerplate, o.config.Generate.HelmCRDDir)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -154,7 +270,6 @@ func (o *OperatorRunner) KustomizeBuild(dir string) (string, error) {
 	}
 	slog.Info("📦 Running kustomize build...", "dir", dir)
 
-	// We need to capture output — use a temp file.
 	tmp, err := os.CreateTemp("", "kustomize-*.yaml")
 	if err != nil {
 		return "", fmt.Errorf("create temp file: %w", err)
@@ -162,8 +277,6 @@ func (o *OperatorRunner) KustomizeBuild(dir string) (string, error) {
 	defer os.Remove(tmp.Name())
 	tmp.Close()
 
-	// Run kustomize build and redirect to tmp (via shell isn't reliable; use exec + capture).
-	// For simplicity, run it and stream to stdout (the caller can pipe as needed).
 	if err := o.executor.Run(context.Background(), o.kustomize(), false, "build", dir); err != nil {
 		return "", fmt.Errorf("kustomize build %s: %w", dir, err)
 	}
@@ -174,8 +287,6 @@ func (o *OperatorRunner) KustomizeBuild(dir string) (string, error) {
 func (o *OperatorRunner) InstallCRDs() error {
 	slog.Info("📥 Installing CRDs into cluster...")
 	start := time.Now()
-	// Run: kustomize build config/crd | kubectl apply -f -
-	// We chain via shell via the exec helper.
 	if err := o.executor.Run(context.Background(), "sh", false,
 		"-c", fmt.Sprintf(`"%s" build config/crd | kubectl apply -f -`, o.kustomize()),
 	); err != nil {
@@ -307,7 +418,45 @@ func (o *OperatorRunner) GenerateAndSync(helmCRDDir string) error {
 	if err := o.GenerateManifests(); err != nil {
 		return err
 	}
-	return o.SyncCRDs("config/crd/bases", helmCRDDir)
+	srcDir := "config/crd/bases"
+	if o.config != nil && o.config.Generate != nil && o.config.Generate.CRDSrcDir != "" {
+		srcDir = o.config.Generate.CRDSrcDir
+	}
+	return o.SyncCRDs(srcDir, helmCRDDir)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Clean
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Clean removes build artifacts. When config is loaded, it uses config.Clean.Paths;
+// otherwise it removes the supplied paths.
+func (o *OperatorRunner) Clean(paths ...string) error {
+	targets := paths
+	if len(targets) == 0 && o.config != nil && o.config.Clean != nil {
+		targets = o.config.Clean.Paths
+	}
+	if len(targets) == 0 {
+		slog.Info("nothing to clean")
+		return nil
+	}
+
+	slog.Info("🧹 Cleaning build artifacts...", "paths", targets)
+	for _, p := range targets {
+		if err := os.RemoveAll(p); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("clean %s: %w", p, err)
+		}
+	}
+	slog.Info("✅ Clean complete")
+	return nil
+}
+
+// CleanFromConfig removes build artifacts using loaded config.
+func (o *OperatorRunner) CleanFromConfig() error {
+	if o.config == nil || o.config.Clean == nil {
+		return fmt.Errorf("no clean configuration loaded")
+	}
+	return o.Clean()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -321,9 +470,7 @@ func (o *OperatorRunner) EnvtestAssets(k8sVersion string) (string, error) {
 		k8sVersion = "1.36"
 	}
 	slog.Info("⬇️  Setting up envtest assets", "k8sVersion", k8sVersion)
-	// setup-envtest use <version> --bin-dir <localbin> -p path
-	// We capture its stdout to get the path.
-	// Use a simple approach: write a small wrapper script.
+
 	tmp, err := os.CreateTemp("", "envtest-path-*.txt")
 	if err != nil {
 		return "", err
