@@ -29,3 +29,7 @@ bench:
 vet:
   packages:
     - ./...
+
+private:
+  modules:
+    - github.com/vinaycharlie01/k0s-cluster-shared

@@ -43,6 +43,9 @@ func (Go) Vet() error { return gomagex.Vet() }
 // Govulncheck runs govulncheck
 func (Go) Govulncheck() error { return gomagex.Govulncheck() }
 
+// PrivateGo configures Git SSH and GOPRIVATE for private modules
+func (Go) PrivateGo() error { return gomagex.PrivateGo() }
+
 // Setup downloads Go module dependencies
 func (Go) Setup() error { return gomagex.Setup() }
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nirantaraai/nava/pkg/exec"
+	execx "github.com/nirantaraai/nava/pkg/exec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,11 +54,73 @@ func (g *GoRunner) LoadConfig(filepath string) error {
 
 // GoConfig contains all Go operation configurations
 type GoConfig struct {
-	Directory string        `yaml:"directory,omitempty"`
-	Setup     *SetupOptions `yaml:"setup,omitempty"`
-	Build     *BuildConfig  `yaml:"build,omitempty"`
-	Run       *RunConfig    `yaml:"run,omitempty"`
-	Test      *TestConfig   `yaml:"test,omitempty"`
+	Directory string         `yaml:"directory,omitempty"`
+	Setup     *SetupOptions  `yaml:"setup,omitempty"`
+	Build     *BuildConfig   `yaml:"build,omitempty"`
+	Run       *RunConfig     `yaml:"run,omitempty"`
+	Test      *TestConfig    `yaml:"test,omitempty"`
+	Private   *PrivateConfig `yaml:"private,omitempty"`
+}
+
+// PrivateConfig contains options for configuring private Go modules and Git SSH access
+type PrivateConfig struct {
+	Modules      []string `yaml:"modules,omitempty"`
+	Repositories []string `yaml:"repositories,omitempty"`
+}
+
+// UnmarshalYAML implements custom unmarshaling to support both a list of modules:
+//
+//	private:
+//	  - github.com/foo/bar
+//	  - github.com/baz/qux
+//
+// and a map with modules/repositories:
+//
+//	private:
+//	  modules:
+//	    - github.com/foo/bar
+func (p *PrivateConfig) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.SequenceNode {
+		var list []string
+		if err := value.Decode(&list); err != nil {
+			return err
+		}
+		p.Modules = list
+		return nil
+	}
+
+	if value.Kind == yaml.MappingNode {
+		type rawPrivateConfig struct {
+			Modules      []string `yaml:"modules,omitempty"`
+			Repositories []string `yaml:"repositories,omitempty"`
+		}
+		var raw rawPrivateConfig
+		if err := value.Decode(&raw); err != nil {
+			return err
+		}
+		p.Modules = raw.Modules
+		p.Repositories = raw.Repositories
+		return nil
+	}
+
+	return fmt.Errorf("invalid YAML format for private config: expected list or map, got kind %d", value.Kind)
+}
+
+// GetModules returns the combined list of unique private modules and repositories.
+func (p *PrivateConfig) GetModules() []string {
+	if p == nil {
+		return nil
+	}
+	var res []string
+	seen := make(map[string]bool)
+	for _, m := range append(p.Modules, p.Repositories...) {
+		m = strings.TrimSpace(m)
+		if m != "" && !seen[m] {
+			seen[m] = true
+			res = append(res, m)
+		}
+	}
+	return res
 }
 
 // SetupOptions contains options for setting up Go environment

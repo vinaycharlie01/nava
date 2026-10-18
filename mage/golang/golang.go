@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -73,6 +74,68 @@ type GoConfig struct {
 	Install     *InstallConfig     `yaml:"install,omitempty"`
 	Govulncheck *GovulncheckConfig `yaml:"govulncheck,omitempty"`
 	CrossBuild  *CrossBuildConfig  `yaml:"crossBuild,omitempty"`
+	Private     *PrivateConfig     `yaml:"private,omitempty"`
+}
+
+// PrivateConfig contains options for configuring private Go modules and Git SSH access
+type PrivateConfig struct {
+	Modules      []string `yaml:"modules,omitempty"`
+	Repositories []string `yaml:"repositories,omitempty"`
+}
+
+// UnmarshalYAML implements custom unmarshaling to support both a list of modules:
+//
+//	private:
+//	  - github.com/foo/bar
+//	  - github.com/baz/qux
+//
+// and a map with modules/repositories:
+//
+//	private:
+//	  modules:
+//	    - github.com/foo/bar
+func (p *PrivateConfig) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.SequenceNode {
+		var list []string
+		if err := value.Decode(&list); err != nil {
+			return err
+		}
+		p.Modules = list
+		return nil
+	}
+
+	if value.Kind == yaml.MappingNode {
+		type rawPrivateConfig struct {
+			Modules      []string `yaml:"modules,omitempty"`
+			Repositories []string `yaml:"repositories,omitempty"`
+		}
+		var raw rawPrivateConfig
+		if err := value.Decode(&raw); err != nil {
+			return err
+		}
+		p.Modules = raw.Modules
+		p.Repositories = raw.Repositories
+		return nil
+	}
+
+	return fmt.Errorf("invalid YAML format for private config: expected list or map, got kind %d", value.Kind)
+}
+
+// GetModules returns the combined list of unique private modules and repositories.
+func (p *PrivateConfig) GetModules() []string {
+	if p == nil {
+		return nil
+	}
+	var res []string
+	seen := make(map[string]bool)
+	for _, m := range append(p.Modules, p.Repositories...) {
+		m = strings.TrimSpace(m)
+		if m != "" && !seen[m] {
+			seen[m] = true
+			res = append(res, m)
+		}
+	}
+	return res
 }
 
 // SetupOptions contains options for setting up Go environment
@@ -732,6 +795,103 @@ func (g *GoRunner) CrossBuildFromConfig() error {
 	return nil
 }
 
+// PrivateGo configures Git SSH URL rewriting and GOPRIVATE for the specified modules.
+// If no modules are passed, it checks the loaded config, then falls back to the GOPRIVATE env var.
+func (g *GoRunner) PrivateGo(modules ...string) error {
+	if len(modules) == 0 {
+		if g.config != nil && g.config.Private != nil {
+			modules = g.config.Private.GetModules()
+		}
+	}
+
+	if len(modules) == 0 {
+		if envVal := os.Getenv("GOPRIVATE"); envVal != "" {
+			for _, part := range strings.Split(envVal, ",") {
+				if part = strings.TrimSpace(part); part != "" {
+					modules = append(modules, part)
+				}
+			}
+		}
+	}
+
+	if len(modules) == 0 {
+		return fmt.Errorf("no private Go modules configured (specify in go.yaml under 'private' or set GOPRIVATE)")
+	}
+
+	// Remove duplicates and trim
+	var clean []string
+	seen := make(map[string]bool)
+	for _, m := range modules {
+		m = strings.TrimSpace(m)
+		if m != "" && !seen[m] {
+			seen[m] = true
+			clean = append(clean, m)
+		}
+	}
+	if len(clean) == 0 {
+		return fmt.Errorf("no valid private Go modules found")
+	}
+
+	goprivateVal := strings.Join(clean, ",")
+
+	slog.Info("Configuring Git SSH URL rewriting...")
+	cmd := exec.Command(
+		"git",
+		"config",
+		"--global",
+		`url.ssh://git@github.com/.insteadOf`,
+		"https://github.com/",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("configure Git SSH URL rewriting: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	// Persist the variable for subsequent GitHub Actions steps.
+	if githubEnv := os.Getenv("GITHUB_ENV"); githubEnv != "" {
+		file, err := os.OpenFile(
+			githubEnv,
+			os.O_APPEND|os.O_WRONLY,
+			0600,
+		)
+		if err != nil {
+			return fmt.Errorf("open GITHUB_ENV: %w", err)
+		}
+
+		_, writeErr := fmt.Fprintf(
+			file,
+			"GOPRIVATE=%s\n",
+			goprivateVal,
+		)
+		closeErr := file.Close()
+
+		if writeErr != nil {
+			return fmt.Errorf("write GOPRIVATE: %w", writeErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close GITHUB_ENV: %w", closeErr)
+		}
+	}
+
+	// Also configure the current process and its child processes.
+	if err := os.Setenv("GOPRIVATE", goprivateVal); err != nil {
+		return fmt.Errorf("set GOPRIVATE: %w", err)
+	}
+
+	slog.Info("Configured Git SSH and GOPRIVATE", "goprivate", goprivateVal)
+	fmt.Printf("Configured Git SSH and GOPRIVATE: %s\n", goprivateVal)
+	return nil
+}
+
+// PrivateGoFromConfig configures Git SSH and GOPRIVATE from the loaded configuration.
+func (g *GoRunner) PrivateGoFromConfig() error {
+	if g.config == nil {
+		if _, err := os.Stat("go.yaml"); err == nil {
+			_ = g.LoadConfig("go.yaml")
+		}
+	}
+	return g.PrivateGo()
+}
+
 // Package-level convenience functions for mage targets
 var defaultRunner = NewGoRunner()
 
@@ -786,3 +946,6 @@ func Govulncheck() error { return defaultRunner.GovulncheckFromConfig() }
 
 // CrossBuild cross-compiles for all configured platforms (requires loaded config)
 func CrossBuild() error { return defaultRunner.CrossBuildFromConfig() }
+
+// PrivateGo configures Git and Go for private module access (requires loaded config or GOPRIVATE)
+func PrivateGo(modules ...string) error { return defaultRunner.PrivateGo(modules...) }
