@@ -33,3 +33,10 @@ vet:
 private:
   modules:
     - github.com/vinaycharlie01/k0s-cluster-shared
+  repositories:
+    # - bitbucket.org/myteam/private-repo
+  rewrites:
+    - insteadOf: https://github.com/
+      with: ssh://git@github.com/
+    # - insteadOf: https://bitbucket.org/
+    #   with: git@bitbucket.org:
