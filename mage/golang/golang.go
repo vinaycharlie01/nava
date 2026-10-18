@@ -77,23 +77,33 @@ type GoConfig struct {
 	Private     *PrivateConfig     `yaml:"private,omitempty"`
 }
 
+// GitRewrite defines a Git URL rewrite rule (insteadOf)
+type GitRewrite struct {
+	InsteadOf string `yaml:"insteadOf,omitempty"`
+	With      string `yaml:"with,omitempty"`
+}
+
 // PrivateConfig contains options for configuring private Go modules and Git SSH access
 type PrivateConfig struct {
-	Modules      []string `yaml:"modules,omitempty"`
-	Repositories []string `yaml:"repositories,omitempty"`
+	Modules      []string     `yaml:"modules,omitempty"`
+	Repositories []string     `yaml:"repositories,omitempty"`
+	Rewrites     []GitRewrite `yaml:"rewrites,omitempty"`
 }
 
 // UnmarshalYAML implements custom unmarshaling to support both a list of modules:
 //
 //	private:
 //	  - github.com/foo/bar
-//	  - github.com/baz/qux
+//	  - bitbucket.org/baz/qux
 //
-// and a map with modules/repositories:
+// and a map with modules/repositories/rewrites:
 //
 //	private:
 //	  modules:
 //	    - github.com/foo/bar
+//	  rewrites:
+//	    - insteadOf: https://github.com/
+//	      with: ssh://git@github.com/
 func (p *PrivateConfig) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind == yaml.SequenceNode {
 		var list []string
@@ -106,8 +116,9 @@ func (p *PrivateConfig) UnmarshalYAML(value *yaml.Node) error {
 
 	if value.Kind == yaml.MappingNode {
 		type rawPrivateConfig struct {
-			Modules      []string `yaml:"modules,omitempty"`
-			Repositories []string `yaml:"repositories,omitempty"`
+			Modules      []string     `yaml:"modules,omitempty"`
+			Repositories []string     `yaml:"repositories,omitempty"`
+			Rewrites     []GitRewrite `yaml:"rewrites,omitempty"`
 		}
 		var raw rawPrivateConfig
 		if err := value.Decode(&raw); err != nil {
@@ -115,6 +126,7 @@ func (p *PrivateConfig) UnmarshalYAML(value *yaml.Node) error {
 		}
 		p.Modules = raw.Modules
 		p.Repositories = raw.Repositories
+		p.Rewrites = raw.Rewrites
 		return nil
 	}
 
@@ -834,16 +846,43 @@ func (g *GoRunner) PrivateGo(modules ...string) error {
 
 	goprivateVal := strings.Join(clean, ",")
 
-	slog.Info("Configuring Git SSH URL rewriting...")
-	cmd := exec.Command(
-		"git",
-		"config",
-		"--global",
-		`url.ssh://git@github.com/.insteadOf`,
-		"https://github.com/",
-	)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("configure Git SSH URL rewriting: %w: %s", err, strings.TrimSpace(string(output)))
+	var rewrites []GitRewrite
+	if g.config != nil && g.config.Private != nil {
+		rewrites = g.config.Private.Rewrites
+	}
+
+	if len(rewrites) == 0 {
+		// Automatically infer rewrite rules from module domains (e.g. github.com, bitbucket.org, gitlab.com, etc.)
+		domainSet := make(map[string]bool)
+		for _, m := range clean {
+			parts := strings.SplitN(m, "/", 2)
+			if parts[0] != "" {
+				domainSet[parts[0]] = true
+			}
+		}
+		for domain := range domainSet {
+			rewrites = append(rewrites, GitRewrite{
+				InsteadOf: "https://" + domain + "/",
+				With:      "ssh://git@" + domain + "/",
+			})
+		}
+	}
+
+	for _, rw := range rewrites {
+		if rw.InsteadOf == "" || rw.With == "" {
+			continue
+		}
+		slog.Info("Configuring Git SSH URL rewriting...", "insteadOf", rw.InsteadOf, "with", rw.With)
+		cmd := exec.Command(
+			"git",
+			"config",
+			"--global",
+			"url."+rw.With+".insteadOf",
+			rw.InsteadOf,
+		)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("configure Git SSH URL rewriting for %s: %w: %s", rw.InsteadOf, err, strings.TrimSpace(string(output)))
+		}
 	}
 
 	// Persist the variable for subsequent GitHub Actions steps.

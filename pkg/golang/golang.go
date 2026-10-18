@@ -62,23 +62,33 @@ type GoConfig struct {
 	Private   *PrivateConfig `yaml:"private,omitempty"`
 }
 
+// GitRewrite defines a Git URL rewrite rule (insteadOf)
+type GitRewrite struct {
+	InsteadOf string `yaml:"insteadOf,omitempty"`
+	With      string `yaml:"with,omitempty"`
+}
+
 // PrivateConfig contains options for configuring private Go modules and Git SSH access
 type PrivateConfig struct {
-	Modules      []string `yaml:"modules,omitempty"`
-	Repositories []string `yaml:"repositories,omitempty"`
+	Modules      []string     `yaml:"modules,omitempty"`
+	Repositories []string     `yaml:"repositories,omitempty"`
+	Rewrites     []GitRewrite `yaml:"rewrites,omitempty"`
 }
 
 // UnmarshalYAML implements custom unmarshaling to support both a list of modules:
 //
 //	private:
 //	  - github.com/foo/bar
-//	  - github.com/baz/qux
+//	  - bitbucket.org/baz/qux
 //
-// and a map with modules/repositories:
+// and a map with modules/repositories/rewrites:
 //
 //	private:
 //	  modules:
 //	    - github.com/foo/bar
+//	  rewrites:
+//	    - insteadOf: https://github.com/
+//	      with: ssh://git@github.com/
 func (p *PrivateConfig) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind == yaml.SequenceNode {
 		var list []string
@@ -91,8 +101,9 @@ func (p *PrivateConfig) UnmarshalYAML(value *yaml.Node) error {
 
 	if value.Kind == yaml.MappingNode {
 		type rawPrivateConfig struct {
-			Modules      []string `yaml:"modules,omitempty"`
-			Repositories []string `yaml:"repositories,omitempty"`
+			Modules      []string     `yaml:"modules,omitempty"`
+			Repositories []string     `yaml:"repositories,omitempty"`
+			Rewrites     []GitRewrite `yaml:"rewrites,omitempty"`
 		}
 		var raw rawPrivateConfig
 		if err := value.Decode(&raw); err != nil {
@@ -100,6 +111,7 @@ func (p *PrivateConfig) UnmarshalYAML(value *yaml.Node) error {
 		}
 		p.Modules = raw.Modules
 		p.Repositories = raw.Repositories
+		p.Rewrites = raw.Rewrites
 		return nil
 	}
 
